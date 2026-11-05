@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Jay's Graphic Arts — Design that gives a business a face</title>
+<meta name="description" content="Jay's Graphic Arts LLC, Peoria, Illinois. Brand identity, promotion, social and digital design, print and business essentials. 35% to start, proof approval before anything is final.">
+<link rel="manifest" href="/frontend/manifest.json">
+<link rel="stylesheet" href="/frontend/style.css">
+<link rel="icon" href="/frontend/icon.svg" type="image/svg+xml">
+</head>
+<body>
+<header>
+  <h1>JAY'S GRAPHIC ARTS <span>PEORIA, ILLINOIS &middot; (779) 396-6934</span></h1>
+  <nav>
+    <button data-view="store" class="active">Store</button>
+    <button data-view="orders">My Orders</button>
+    <button data-view="account">Sign In</button>
+    <button data-view="owner">Owner</button>
+  </nav>
+</header>
+<main>
+  <div class="notice"><b>Stripe is in TEST MODE.</b> No real money moves until the owner finishes verification in the Stripe Dashboard. <b>In-memory v1:</b> restarting the server clears all orders and sessions, and the free Render instance sleeps after inactivity.</div>
+  <div id="view-store"></div>
+  <div id="view-orders" class="hidden"></div>
+  <div id="view-account" class="hidden"></div>
+  <div id="view-owner" class="hidden"></div>
+</main>
+<footer>
+  Jay's Graphic Arts LLC &middot; Peoria, Illinois &middot; (779) 396-6934 &middot; johnarenz@jaysgraphicarts.com<br>
+  Design that gives a business a face, a voice, and something worth remembering. Terms: 35% to start, balance before final clean files, proof approval before anything is final. Client owns files outright.
+</footer>
+<script src="/frontend/app.js"></script>
+</body>
+</html>
