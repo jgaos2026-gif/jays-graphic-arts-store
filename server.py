@@ -27,9 +27,21 @@ Money rules, unchanged from the business:
   from the Stripe Dashboard.
 
 Limits, stated so they cannot drift:
-- v1 is SINGLE-PROCESS and IN-MEMORY. Restarting the server clears
-  all clients, orders, and sessions. A public multi-user release
+- v1 is SINGLE-PROCESS and IN-MEMORY by default. Restarting the server
+  clears all clients, orders, and sessions. A public multi-user release
   needs a real database with transactions first.
+- Supabase mode: when SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are set
+  in the environment, the server uses the Supabase project as its durable
+  store (supabase_store.py, stdlib PostgREST, service-role key held by
+  the server only). Intake, quotes, payments, QA, VERA decisions, state
+  advances, exceptions, and evidence go through the brick1
+  security-definer functions; the 10-bucket brick1 allocation is the
+  Brick 1 allocation, NOT the Talent Agent Plus 11VT. If Supabase is
+  unset or unreachable at startup, the server runs in-memory exactly as
+  before and says so on /api/health ("store": "in-memory"). The runtime
+  engine still holds live state in memory in v1 — the adapter is the
+  durable-store client, not a full engine-to-Postgres migration (that is
+  verified against the live database, not claimed here).
 - This is NOT an APK/AAB and NOT on the Play Store. It is the
   working app a Play Store wrapper (Capacitor/Android Studio)
   would package.
@@ -46,8 +58,15 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
 from jga import JGAStore, JGAError, vistaprint_quote, VERSION  # noqa: E402
+from supabase_store import SupabaseStore, SupabaseError  # noqa: E402
 
 APP = JGAStore()
+
+# Durable store (Supabase) if configured and reachable at startup;
+# otherwise the existing in-memory store, exactly as before.
+# Never crashes, never logs a key — see supabase_store.py.
+STORE = SupabaseStore.from_env()
+STORE_MODE = "supabase" if STORE.initialize() else "in-memory"
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -108,7 +127,20 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"ok": True, "product": "Jay's Graphic Arts",
                                         "version": VERSION,
                                         "banking_execution": "NONE_LEDGER_RECEIPT_ONLY",
-                                        "stripe_mode": "test"})
+                                        "stripe_mode": "test",
+                                        "store": STORE_MODE, "supabase_configured": STORE.configured})
+            if path == "/api/store/verify":
+                APP._require_owner(self._token())
+                if STORE.enabled:
+                    try:
+                        valid = STORE.verify_evidence_chain()
+                    except SupabaseError as e:
+                        raise JGAError("Supabase verify failed: " + str(e))
+                    return self._send(200, {"ok": True, "store": STORE_MODE,
+                                            "evidence_chain_valid": valid})
+                return self._send(200, {"ok": True, "store": STORE_MODE,
+                                        "evidence_chain_valid": None,
+                                        "note": "Supabase is not configured — running in-memory; nothing to verify"})
             if path == "/api/public":
                 return self._send(200, APP.public_catalog())
             if path == "/api/stripe/links":
