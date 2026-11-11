@@ -414,14 +414,25 @@ class JGAStore:
         """BCT gate (milestone 2): an order state change is certified only
         when the transition is chained to the order's recorded state hash
         and actually changes state — the fixed BctVerifier layer-5 rules
-        (see bct_verify.py). Returns the new state hash and advances the
+        (see bct_verify.py). The order's chain head is passed as the
+        anchoring registry (finding 15), so a forged, stale, or
+        branching parent is rejected; genesis is allowed only for an
+        order with no head yet. Trust root: the prior is ALWAYS read
+        from this dict, never from a caller — a caller cannot inject a
+        parent. The dict itself is the anchor: if it (or the snapshot
+        file it persists to) is tampered with, this layer cannot tell —
+        cross-checking heads against the evidence ledger is the
+        remaining hardening step (see the red-team report). Returns the new state hash and advances the
         chain head. Raises JGAError and records the rejection on any
         failure: the transition must not proceed."""
         prior = self._bct_chain_head.get(order["order_id"], bct_verify.GENESIS)
         new_state = {"order_id": order["order_id"], "state": to_state}
         declared = bct_verify.state_hash(new_state)
         transition = bct_verify.compute_transition_hash(declared, prior)
-        ok, reason = bct_verify.verify_transition(prior, new_state, declared, transition)
+        ok, reason = bct_verify.verify_transition(
+            prior, new_state, declared, transition,
+            identity=order["order_id"], registry=self._bct_chain_head,
+            allow_genesis=True)
         if not ok:
             self._bct_rejections.append({
                 "order_id": order["order_id"], "from_state": order["state"],
