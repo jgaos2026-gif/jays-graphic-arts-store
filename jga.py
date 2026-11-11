@@ -362,14 +362,13 @@ class JGAStore:
             prod = next((p for p in PRINT_PRODUCTS if p["id"] == print_product_id), None)
             if prod is None:
                 raise JGAError("unknown print product")
-            if vistaprint_cost_cents is None or delivery_cents is None:
-                raise JGAError("a print order needs the Vistaprint cost and "
-                               "the delivery cost from the Vistaprint quote")
-            quote = vistaprint_quote(int(vistaprint_cost_cents), int(delivery_cents))
+            if vistaprint_cost_cents is not None or delivery_cents is not None:
+                raise JGAError("print costs are owner-controlled; place the order first and wait for the owner quote")
             order.update({"kind": "print", "print_product_id": prod["id"],
                           "title": prod["name"] + " (Vistaprint print)",
-                          "price_cents": quote["total_cents"],
-                          "vistaprint": quote})
+                          "price_cents": None, "deposit_cents": None,
+                          "balance_cents": None, "vistaprint": None,
+                          "quote_pending": True})
         elif service_id:
             svc = next((s for s in SERVICES if s["id"] == service_id), None)
             if svc is None:
@@ -382,13 +381,46 @@ class JGAStore:
                           "title": svc["name"], "price_cents": price})
         else:
             raise JGAError("pick a package, a service, or a print product")
-        order["deposit_cents"] = deposit_cents(order["price_cents"])
-        order["balance_cents"] = order["price_cents"] - order["deposit_cents"]
+        if order.get("price_cents") is not None:
+            order["deposit_cents"] = deposit_cents(order["price_cents"])
+            order["balance_cents"] = order["price_cents"] - order["deposit_cents"]
         oid = "order-%04d" % self._next_order
         self._next_order += 1
         order["order_id"] = oid
         self.orders[oid] = order
         return self._order_view(order, cid)
+
+    def set_print_quote(self, token, order_id, vistaprint_cost_cents, delivery_cents):
+        """Set the final print price from an owner-entered supplier quote."""
+        self._require_owner(token)
+        order = self.orders.get(order_id)
+        if order is None:
+            raise JGAError("no such order")
+        if order.get("kind") != "print":
+            raise JGAError("only print orders accept a Vistaprint quote")
+        if not order.get("quote_pending"):
+            raise JGAError("print quote has already been set")
+        quote = vistaprint_quote(vistaprint_cost_cents, delivery_cents)
+        order["vistaprint"] = quote
+        order["price_cents"] = quote["total_cents"]
+        order["deposit_cents"] = deposit_cents(order["price_cents"])
+        order["balance_cents"] = order["price_cents"] - order["deposit_cents"]
+        order["quote_pending"] = False
+        order["quote_set_at"] = int(time.time())
+        return self._order_view(order)
+
+    def expected_payment_amount(self, token, order_id, kind):
+        self._require_owner(token)
+        order = self.orders.get(order_id)
+        if order is None:
+            raise JGAError("no such order")
+        if order.get("price_cents") is None:
+            raise JGAError("payment cannot be accepted before the order is priced")
+        if kind not in ("deposit", "balance", "full"):
+            raise JGAError("payment kind must be deposit, balance or full")
+        return {"deposit": order["deposit_cents"],
+                "balance": order["balance_cents"],
+                "full": order["price_cents"]}[kind]
 
     def _order_view(self, order, viewer_client_id=None):
         view = {k: v for k, v in order.items()}
@@ -466,6 +498,8 @@ class JGAStore:
             raise JGAError("no such order")
         if state not in ORDER_STATES:
             raise JGAError("unknown order state")
+        if order.get("price_cents") is None:
+            raise JGAError("print order cannot advance until the owner sets its Vistaprint quote")
         cur = order["state"]
         allowed = {
             "REQUESTED": ["IN_DESIGN", "CANCELLED"],
@@ -494,7 +528,7 @@ class JGAStore:
         return self._order_view(order)
 
     def record_payment(self, token, order_id, stripe_object_id,
-                       amount_cents, kind):
+                       amount_cents, kind, verified_payment=None):
         """Record a CLEARED Stripe payment. Receipt-only: the app moves
         no bank funds. The amount must equal what is owed for that kind,
         and a Stripe object id (pi_ / cs_ / ch_ / in_) is required."""
@@ -502,19 +536,23 @@ class JGAStore:
         order = self.orders.get(order_id)
         if order is None:
             raise JGAError("no such order")
-        if not stripe_object_id or not any(
-                stripe_object_id.startswith(p)
-                for p in ("pi_", "cs_", "ch_", "in_")):
-            raise JGAError("a real Stripe payment id is required "
-                           "(pi_, cs_, ch_ or in_)")
+        if not isinstance(verified_payment, dict):
+            raise JGAError("payment must be retrieved and verified directly with Stripe")
+        if (verified_payment.get("id") != stripe_object_id
+                or verified_payment.get("status") != "succeeded"
+                or verified_payment.get("currency") != "usd"
+                or verified_payment.get("livemode") is not False):
+            raise JGAError("Stripe payment verification failed")
+        if not isinstance(stripe_object_id, str) or not stripe_object_id.startswith("pi_"):
+            raise JGAError("only Stripe PaymentIntent IDs are accepted")
         if kind not in ("deposit", "balance", "full"):
             raise JGAError("payment kind must be deposit, balance or full")
         expected = {"deposit": order["deposit_cents"],
                     "balance": order["balance_cents"],
                     "full": order["price_cents"]}[kind]
-        if int(amount_cents) != expected:
-            raise JGAError("that payment is %d cents but %s is %d cents"
-                           % (int(amount_cents), kind, expected))
+        if int(amount_cents) != expected or verified_payment.get("amount_received") != expected:
+            raise JGAError("verified Stripe amount does not equal the %s amount of %d cents"
+                           % (kind, expected))
         if any(p.get("stripe_object_id") == stripe_object_id for p in order["payments"]):
             raise JGAError("Stripe object id already recorded for this order")
         if kind == "deposit" and order["deposit_paid"]:
