@@ -229,7 +229,7 @@ async function renderOwnerDash() {
       <button class="btn ghost" onclick="setState('${o.order_id}','PROOF_SENT')">Send proof</button>
       <button class="btn ghost" onclick="setState('${o.order_id}','DELIVERED')">Deliver clean files</button>
       <button class="btn ghost" onclick="setState('${o.order_id}','CANCELLED')">Cancel</button>
-      <div style="margin-top:8px"><label>Record a cleared Stripe payment — Stripe object id (pi_ / cs_ / ch_ / in_)</label>
+      <div style="margin-top:8px"><label>Record a cleared Stripe payment — verified Stripe PaymentIntent ID (pi_ only; metadata order_id must match)</label>
       <input id="pay-id-${o.order_id}" placeholder="e.g. pi_...">
       <label>Amount (dollars)</label><input id="pay-amt-${o.order_id}" type="number" step="0.01" min="0">
       <label>Kind</label><select id="pay-kind-${o.order_id}"><option value="deposit">Deposit 35%</option><option value="balance">Balance 65%</option><option value="full">Full payment</option></select>
