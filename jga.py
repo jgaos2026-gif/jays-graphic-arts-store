@@ -477,8 +477,6 @@ class JGAStore:
         }
         if state not in allowed.get(cur, []):
             raise JGAError("cannot move an order from %s to %s" % (cur, state))
-        if state == "PROOF_SENT":
-            order["proof"] = "sent"
         if state == "DELIVERED":
             if order["proof"] != "approved":
                 raise JGAError("clean files release only after the client "
@@ -486,8 +484,12 @@ class JGAStore:
             if not order["paid_in_full"]:
                 raise JGAError("clean files release only after final payment "
                                "is cleared")
-            order["clean_files_released"] = True
+        # Certify first. No business flags may mutate if BCT rejects.
         self._bct_certify_order_transition(order, state)
+        if state == "PROOF_SENT":
+            order["proof"] = "sent"
+        if state == "DELIVERED":
+            order["clean_files_released"] = True
         order["state"] = state
         return self._order_view(order)
 
@@ -513,12 +515,20 @@ class JGAStore:
         if int(amount_cents) != expected:
             raise JGAError("that payment is %d cents but %s is %d cents"
                            % (int(amount_cents), kind, expected))
+        if any(p.get("stripe_object_id") == stripe_object_id for p in order["payments"]):
+            raise JGAError("Stripe object id already recorded for this order")
         if kind == "deposit" and order["deposit_paid"]:
             raise JGAError("deposit already recorded")
-        if kind == "balance" and order["balance_paid"]:
-            raise JGAError("balance already recorded")
-        if kind == "full" and order["paid_in_full"]:
-            raise JGAError("full payment already recorded")
+        if kind == "balance":
+            if not order["deposit_paid"]:
+                raise JGAError("balance cannot be recorded before the deposit")
+            if order["balance_paid"]:
+                raise JGAError("balance already recorded")
+        if kind == "full":
+            if order["payments"]:
+                raise JGAError("full payment cannot be combined with a prior deposit or balance")
+            if order["paid_in_full"]:
+                raise JGAError("full payment already recorded")
         order["payments"].append({"stripe_object_id": stripe_object_id,
                                   "amount_cents": int(amount_cents),
                                   "kind": kind})
