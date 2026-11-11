@@ -25,6 +25,7 @@ jobs:
               echo "===== END $f ====="
             fi
           done
+          rm -f .github/workflows/test.yml
           rm -f "$ZIP"
           rm -f .github/workflows/redteam-unpack.yml
           git config user.name "github-actions[bot]"
