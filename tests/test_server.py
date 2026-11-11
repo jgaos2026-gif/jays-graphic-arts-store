@@ -143,6 +143,16 @@ class TestJGA(unittest.TestCase):
                      "kind": "deposit"}, owner)
         self.assertEqual(s, 200)
         self.assertTrue(o["deposit_paid"])
+        # A full payment cannot be stacked on top of an already-recorded deposit.
+        s, _ = call(b, "/api/orders/%s/record-payment" % oid,
+                    {"stripe_object_id": "pi_test_full_after_deposit",
+                     "amount_cents": 35000, "kind": "full"}, owner)
+        self.assertEqual(s, 400)
+        # A Stripe object cannot be reused for another payment on this order.
+        s, _ = call(b, "/api/orders/%s/record-payment" % oid,
+                    {"stripe_object_id": "pi_test_deposit",
+                     "amount_cents": 22750, "kind": "balance"}, owner)
+        self.assertEqual(s, 400)
         s, o = call(b, "/api/orders/%s/approve-proof" % oid, {}, atok)
         self.assertEqual(s, 200)
         self.assertEqual(o["state"], "PROOF_APPROVED")
