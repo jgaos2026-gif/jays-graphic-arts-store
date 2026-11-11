@@ -28,6 +28,7 @@ import bct_verify
 import hashlib
 import secrets
 import time
+import re
 
 VERSION = "1.0.0-render"
 
@@ -547,7 +548,7 @@ class JGAStore:
                 or not isinstance(metadata, dict)
                 or metadata.get("order_id") != order_id):
             raise JGAError("Stripe payment verification failed or PaymentIntent is not bound to this order")
-        if not isinstance(stripe_object_id, str) or not stripe_object_id.startswith("pi_"):
+        if not isinstance(stripe_object_id, str) or not re.fullmatch(r"pi_[A-Za-z0-9]+", stripe_object_id):
             raise JGAError("only Stripe PaymentIntent IDs are accepted")
         if kind not in ("deposit", "balance", "full"):
             raise JGAError("payment kind must be deposit, balance or full")
