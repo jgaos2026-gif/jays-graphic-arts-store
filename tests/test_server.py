@@ -153,7 +153,7 @@ class TestJGA(unittest.TestCase):
         self.assertEqual(s, 400)
         # deposit recorded, then client approves the proof
         s, o = call(b, "/api/orders/%s/record-payment" % oid,
-                    {"stripe_object_id": "pi_test_deposit", "amount_cents": 12250,
+                    {"stripe_object_id": "pi_testdeposit", "amount_cents": 12250,
                      "kind": "deposit"}, owner)
         self.assertEqual(s, 200)
         self.assertTrue(o["deposit_paid"])
@@ -162,17 +162,17 @@ class TestJGA(unittest.TestCase):
         s, other = call(b, "/api/orders", {"package_id": "logo", "brief": "Second logo"}, atok)
         self.assertEqual(s, 200)
         s, _ = call(b, "/api/orders/%s/record-payment" % other["order_id"],
-                    {"stripe_object_id": "pi_test_deposit",
+                    {"stripe_object_id": "pi_testdeposit",
                      "amount_cents": 12250, "kind": "deposit"}, owner)
         self.assertEqual(s, 400)
         # A full payment cannot be stacked on top of an already-recorded deposit.
         s, _ = call(b, "/api/orders/%s/record-payment" % oid,
-                    {"stripe_object_id": "pi_test_full_after_deposit",
+                    {"stripe_object_id": "pi_testfullafterdeposit",
                      "amount_cents": 35000, "kind": "full"}, owner)
         self.assertEqual(s, 400)
         # A Stripe object cannot be reused for another payment on this order.
         s, _ = call(b, "/api/orders/%s/record-payment" % oid,
-                    {"stripe_object_id": "pi_test_deposit",
+                    {"stripe_object_id": "pi_testdeposit",
                      "amount_cents": 22750, "kind": "balance"}, owner)
         self.assertEqual(s, 400)
         s, o = call(b, "/api/orders/%s/approve-proof" % oid, {}, atok)
@@ -182,7 +182,7 @@ class TestJGA(unittest.TestCase):
         s, _ = call(b, "/api/orders/%s/state" % oid, {"state": "DELIVERED"}, owner)
         self.assertEqual(s, 400)
         s, o = call(b, "/api/orders/%s/record-payment" % oid,
-                    {"stripe_object_id": "pi_test_balance", "amount_cents": 22750,
+                    {"stripe_object_id": "pi_testbalance", "amount_cents": 22750,
                      "kind": "balance"}, owner)
         self.assertEqual(s, 200)
         self.assertTrue(o["paid_in_full"])
