@@ -48,13 +48,13 @@ class TestJGA(unittest.TestCase):
         cls.base = "http://127.0.0.1:%d" % cls.port
         threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
         os.environ["JGA_OWNER_SETUP_TOKEN"] = "test-only-bootstrap-token"
-        def fake_stripe_payment(payment_intent_id, expected_amount_cents):
+        def fake_stripe_payment(payment_intent_id, expected_amount_cents, order_id):
             if not isinstance(payment_intent_id, str) or not payment_intent_id.startswith("pi_"):
                 from jga import JGAError
                 raise JGAError("only a Stripe PaymentIntent ID (pi_) is accepted")
             return {"id": payment_intent_id, "status": "succeeded",
                     "currency": "usd", "amount_received": expected_amount_cents,
-                    "livemode": False}
+                    "livemode": False, "metadata": {"order_id": order_id}}
         server_module.verify_stripe_payment = fake_stripe_payment
         _, r = call(cls.base, "/api/setup-owner", {
             "password": "owner-pass-123",
