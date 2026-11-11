@@ -51,6 +51,7 @@ Limits, stated so they cannot drift:
 import hmac
 import json
 import os
+import re
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
@@ -68,10 +69,10 @@ APP = JGAStore()
 
 def verify_stripe_payment(payment_intent_id, expected_amount_cents, order_id):
     """Retrieve the PaymentIntent from Stripe; never trust a client-supplied ID."""
-    if not isinstance(payment_intent_id, str) or not payment_intent_id.startswith("pi_"):
+    if not isinstance(payment_intent_id, str) or not re.fullmatch(r"pi_[A-Za-z0-9]+", payment_intent_id):
         raise JGAError("only a Stripe PaymentIntent ID (pi_) is accepted")
     secret = os.environ.get("STRIPE_SECRET_KEY", "")
-    if not secret.startswith(("sk_test_", "sk_live_")):
+    if not secret.startswith("sk_test_"):
         raise JGAError("Stripe verification is unavailable; configure STRIPE_SECRET_KEY")
     request = urllib.request.Request(
         "https://api.stripe.com/v1/payment_intents/" + payment_intent_id,
