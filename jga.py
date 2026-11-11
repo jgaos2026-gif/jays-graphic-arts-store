@@ -24,6 +24,7 @@ Real rules, unchanged from the business:
 - Privacy: a signed-in client sees ONLY their own orders. The owner
   sees all orders. Signed-out visitors see only the public catalog.
 """
+import bct_verify
 import hashlib
 import secrets
 import time
@@ -227,6 +228,12 @@ class JGAStore:
         self.orders = {}     # order_id -> dict
         self._next_client = 1
         self._next_order = 1
+        # BCT state chains (milestone 2): order_id -> hash of the order's
+        # last certified state. The chain head is the root of trust for
+        # transition verification. Rejections are recorded, never silent.
+        # (In-memory only in v1, like the orders themselves.)
+        self._bct_chain_head: dict[str, str] = {}
+        self._bct_rejections: list[dict] = []
 
     # -- auth ---------------------------------------------------------
     def create_owner(self, password):
@@ -403,6 +410,27 @@ class JGAStore:
             raise JGAError("that order is not yours")
         return self._order_view(order)
 
+    def _bct_certify_order_transition(self, order, to_state):
+        """BCT gate (milestone 2): an order state change is certified only
+        when the transition is chained to the order's recorded state hash
+        and actually changes state — the fixed BctVerifier layer-5 rules
+        (see bct_verify.py). Returns the new state hash and advances the
+        chain head. Raises JGAError and records the rejection on any
+        failure: the transition must not proceed."""
+        prior = self._bct_chain_head.get(order["order_id"], bct_verify.GENESIS)
+        new_state = {"order_id": order["order_id"], "state": to_state}
+        declared = bct_verify.state_hash(new_state)
+        transition = bct_verify.compute_transition_hash(declared, prior)
+        ok, reason = bct_verify.verify_transition(prior, new_state, declared, transition)
+        if not ok:
+            self._bct_rejections.append({
+                "order_id": order["order_id"], "from_state": order["state"],
+                "to_state": to_state, "reason": reason})
+            raise JGAError(
+                "BCT verification failed for order %s: %s" % (order["order_id"], reason))
+        self._bct_chain_head[order["order_id"]] = declared
+        return declared
+
     def approve_proof(self, token, order_id):
         cid = self._require_client(token)
         order = self.orders.get(order_id)
@@ -412,6 +440,7 @@ class JGAStore:
             raise JGAError("that order is not yours")
         if order["proof"] != "sent":
             raise JGAError("there is no proof waiting for your approval yet")
+        self._bct_certify_order_transition(order, "PROOF_APPROVED")
         order["proof"] = "approved"
         order["state"] = "PROOF_APPROVED"
         return self._order_view(order)
@@ -444,6 +473,7 @@ class JGAStore:
                 raise JGAError("clean files release only after final payment "
                                "is cleared")
             order["clean_files_released"] = True
+        self._bct_certify_order_transition(order, state)
         order["state"] = state
         return self._order_view(order)
 
