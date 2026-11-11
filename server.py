@@ -48,11 +48,15 @@ Limits, stated so they cannot drift:
 - Tokens are stored in the browser's localStorage in v1. A packaged
   phone app must move them to platform secure storage.
 """
+import hmac
 import json
 import os
+import re
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
+import urllib.error
+import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -61,6 +65,41 @@ from jga import JGAStore, JGAError, vistaprint_quote, VERSION  # noqa: E402
 from supabase_store import SupabaseStore, SupabaseError  # noqa: E402
 
 APP = JGAStore()
+
+
+def verify_stripe_payment(payment_intent_id, expected_amount_cents, order_id):
+    """Retrieve the PaymentIntent from Stripe; never trust a client-supplied ID."""
+    if not isinstance(payment_intent_id, str) or not re.fullmatch(r"pi_[A-Za-z0-9]+", payment_intent_id):
+        raise JGAError("only a Stripe PaymentIntent ID (pi_) is accepted")
+    secret = os.environ.get("STRIPE_SECRET_KEY", "")
+    if not secret.startswith("sk_test_"):
+        raise JGAError("Stripe verification is unavailable; configure STRIPE_SECRET_KEY")
+    request = urllib.request.Request(
+        "https://api.stripe.com/v1/payment_intents/" + payment_intent_id,
+        headers={"Authorization": "Bearer " + secret},
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            payment = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        raise JGAError("Stripe could not verify that PaymentIntent") from exc
+    except (urllib.error.URLError, TimeoutError, ValueError) as exc:
+        raise JGAError("Stripe verification request failed") from exc
+    if payment.get("id") != payment_intent_id:
+        raise JGAError("Stripe returned a different PaymentIntent")
+    if payment.get("status") != "succeeded":
+        raise JGAError("Stripe PaymentIntent is not succeeded")
+    if payment.get("amount_received") != expected_amount_cents:
+        raise JGAError("Stripe amount received does not match the order amount")
+    if payment.get("currency") != "usd":
+        raise JGAError("Stripe PaymentIntent currency must be USD")
+    metadata = payment.get("metadata")
+    if not isinstance(metadata, dict) or metadata.get("order_id") != order_id:
+        raise JGAError("Stripe PaymentIntent metadata must bind it to this order")
+    if payment.get("livemode") is not False:
+        raise JGAError("this storefront is configured for Stripe test mode only")
+    return payment
 
 # Durable store (Supabase) if configured and reachable at startup;
 # otherwise the existing in-memory store, exactly as before.
@@ -163,6 +202,12 @@ class Handler(BaseHTTPRequestHandler):
         tok = self._token()
         try:
             if path == "/api/setup-owner":
+                bootstrap = os.environ.get("JGA_OWNER_SETUP_TOKEN", "")
+                supplied = body.get("setup_token", "")
+                if not bootstrap:
+                    return self._send(503, {"error": "owner bootstrap is disabled; configure JGA_OWNER_SETUP_TOKEN"})
+                if not isinstance(supplied, str) or not hmac.compare_digest(supplied, bootstrap):
+                    return self._send(403, {"error": "invalid owner bootstrap credential"})
                 APP.create_owner(body["password"])
                 return self._send(200, {"ok": True})
             if path == "/api/login-owner":
@@ -185,9 +230,12 @@ class Handler(BaseHTTPRequestHandler):
                     tok, package_id=body.get("package_id"),
                     service_id=body.get("service_id"),
                     brief=body.get("brief", ""),
-                    print_product_id=body.get("print_product_id"),
-                    vistaprint_cost_cents=body.get("vistaprint_cost_cents"),
-                    delivery_cents=body.get("delivery_cents")))
+                    print_product_id=body.get("print_product_id")))
+            if path.startswith("/api/orders/") and path.endswith("/vistaprint-quote"):
+                oid = path.split("/")[3]
+                return self._send(200, APP.set_print_quote(
+                    tok, oid, int(body["vistaprint_cost_cents"]),
+                    int(body["delivery_cents"])))
             if path.startswith("/api/orders/") and path.endswith("/approve-proof"):
                 oid = path.split("/")[3]
                 return self._send(200, APP.approve_proof(tok, oid))
@@ -196,9 +244,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, APP.set_order_state(tok, oid, body["state"]))
             if path.startswith("/api/orders/") and path.endswith("/record-payment"):
                 oid = path.split("/")[3]
+                expected = APP.expected_payment_amount(tok, oid, body["kind"])
+                verified = verify_stripe_payment(body["stripe_object_id"], expected, oid)
                 return self._send(200, APP.record_payment(
                     tok, oid, body["stripe_object_id"],
-                    int(body["amount_cents"]), body["kind"]))
+                    int(body["amount_cents"]), body["kind"], verified))
             return self._send(404, {"error": "unknown route"})
         except (JGAError, KeyError, ValueError, TypeError) as e:
             self._send(400, {"error": str(e)})

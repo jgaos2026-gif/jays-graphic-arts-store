@@ -326,8 +326,12 @@ class OrderGateTests(unittest.TestCase):
         self.assertEqual(store.orders[oid]["state"], "PROOF_APPROVED")
         self.assertEqual(store.orders[oid]["proof"], "approved")
         # Full payment, then delivery — the whole chain stays certified.
-        store.record_payment(owner, oid, "pi_test_bct_0001",
-                             order["price_cents"], "full")
+        store.record_payment(owner, oid, "pi_testbct0001",
+                             order["price_cents"], "full",
+                             {"id": "pi_testbct0001", "status": "succeeded",
+                              "currency": "usd", "livemode": False,
+                              "amount_received": order["price_cents"],
+                              "metadata": {"order_id": oid}})
         store.set_order_state(owner, oid, "DELIVERED")
         self.assertEqual(store.orders[oid]["state"], "DELIVERED")
         self.assertTrue(store.orders[oid]["clean_files_released"])

@@ -8,6 +8,7 @@ import urllib.request
 import urllib.error
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import server as server_module  # noqa: E402
 from server import ThreadingHTTPServer, Handler  # noqa: E402
 
 LINKS = {
@@ -46,7 +47,19 @@ class TestJGA(unittest.TestCase):
         cls.port = cls.srv.server_address[1]
         cls.base = "http://127.0.0.1:%d" % cls.port
         threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
-        _, r = call(cls.base, "/api/setup-owner", {"password": "owner-pass-123"})
+        os.environ["JGA_OWNER_SETUP_TOKEN"] = "test-only-bootstrap-token"
+        def fake_stripe_payment(payment_intent_id, expected_amount_cents, order_id):
+            if not isinstance(payment_intent_id, str) or not payment_intent_id.startswith("pi_"):
+                from jga import JGAError
+                raise JGAError("only a Stripe PaymentIntent ID (pi_) is accepted")
+            return {"id": payment_intent_id, "status": "succeeded",
+                    "currency": "usd", "amount_received": expected_amount_cents,
+                    "livemode": False, "metadata": {"order_id": order_id}}
+        server_module.verify_stripe_payment = fake_stripe_payment
+        _, r = call(cls.base, "/api/setup-owner", {
+            "password": "owner-pass-123",
+            "setup_token": os.environ["JGA_OWNER_SETUP_TOKEN"]
+        })
         assert r.get("ok")
         _, r = call(cls.base, "/api/login-owner", {"password": "owner-pass-123"})
         cls.owner = r["token"]
@@ -133,12 +146,35 @@ class TestJGA(unittest.TestCase):
                     {"stripe_object_id": "not-a-stripe-id", "amount_cents": 12250,
                      "kind": "deposit"}, owner)
         self.assertEqual(s, 400)
+        # A prefix-only PaymentIntent lookalike must not become a URL/path payload.
+        s, _ = call(b, "/api/orders/%s/record-payment" % oid,
+                    {"stripe_object_id": "pi_test/../../api", "amount_cents": 12250,
+                     "kind": "deposit"}, owner)
+        self.assertEqual(s, 400)
         # deposit recorded, then client approves the proof
         s, o = call(b, "/api/orders/%s/record-payment" % oid,
-                    {"stripe_object_id": "pi_test_deposit", "amount_cents": 12250,
+                    {"stripe_object_id": "pi_testdeposit", "amount_cents": 12250,
                      "kind": "deposit"}, owner)
         self.assertEqual(s, 200)
         self.assertTrue(o["deposit_paid"])
+        # A PaymentIntent already consumed by one order cannot be replayed
+        # against another order, even if the amounts happen to match.
+        s, other = call(b, "/api/orders", {"package_id": "logo", "brief": "Second logo"}, atok)
+        self.assertEqual(s, 200)
+        s, _ = call(b, "/api/orders/%s/record-payment" % other["order_id"],
+                    {"stripe_object_id": "pi_testdeposit",
+                     "amount_cents": 12250, "kind": "deposit"}, owner)
+        self.assertEqual(s, 400)
+        # A full payment cannot be stacked on top of an already-recorded deposit.
+        s, _ = call(b, "/api/orders/%s/record-payment" % oid,
+                    {"stripe_object_id": "pi_testfullafterdeposit",
+                     "amount_cents": 35000, "kind": "full"}, owner)
+        self.assertEqual(s, 400)
+        # A Stripe object cannot be reused for another payment on this order.
+        s, _ = call(b, "/api/orders/%s/record-payment" % oid,
+                    {"stripe_object_id": "pi_testdeposit",
+                     "amount_cents": 22750, "kind": "balance"}, owner)
+        self.assertEqual(s, 400)
         s, o = call(b, "/api/orders/%s/approve-proof" % oid, {}, atok)
         self.assertEqual(s, 200)
         self.assertEqual(o["state"], "PROOF_APPROVED")
@@ -146,7 +182,7 @@ class TestJGA(unittest.TestCase):
         s, _ = call(b, "/api/orders/%s/state" % oid, {"state": "DELIVERED"}, owner)
         self.assertEqual(s, 400)
         s, o = call(b, "/api/orders/%s/record-payment" % oid,
-                    {"stripe_object_id": "pi_test_balance", "amount_cents": 22750,
+                    {"stripe_object_id": "pi_testbalance", "amount_cents": 22750,
                      "kind": "balance"}, owner)
         self.assertEqual(s, 200)
         self.assertTrue(o["paid_in_full"])
@@ -161,9 +197,20 @@ class TestJGA(unittest.TestCase):
         atok = l1["token"]
         s, o = call(b, "/api/orders", {"print_product_id": "print-flyers",
                                        "brief": "100 flyers",
-                                       "vistaprint_cost_cents": 5000,
-                                       "delivery_cents": 800}, atok)
+                                       "vistaprint_cost_cents": 1,
+                                       "delivery_cents": 0}, atok)
         self.assertEqual(s, 200, o)
+        self.assertTrue(o["quote_pending"])
+        self.assertIsNone(o["price_cents"])
+        # A client cannot set their own print price. Only owner quote can price it.
+        oid = o["order_id"]
+        s, _ = call(b, "/api/orders/%s/vistaprint-quote" % oid,
+                    {"vistaprint_cost_cents": 5000, "delivery_cents": 800}, atok)
+        self.assertEqual(s, 400)
+        s, o = call(b, "/api/orders/%s/vistaprint-quote" % oid,
+                    {"vistaprint_cost_cents": 5000, "delivery_cents": 800}, owner)
+        self.assertEqual(s, 200, o)
+        self.assertFalse(o["quote_pending"])
         self.assertEqual(o["price_cents"], 7140)
         self.assertEqual(o["deposit_cents"], 2499)  # 35% of 7140
         self.assertEqual(o["vistaprint"]["total_cents"], 7140)

@@ -124,14 +124,12 @@ async function placeOrder() {
     print_product_id: $("#ord-print").value || undefined,
     brief: $("#ord-brief").value,
   };
-  if (body.print_product_id) {
-    const cost = Math.round(parseFloat($("#vp-cost").value || "0") * 100);
-    const del = Math.round(parseFloat($("#vp-delivery").value || "0") * 100);
-    body.vistaprint_cost_cents = cost; body.delivery_cents = del;
-  }
   try {
     const o = await api("/api/orders", body, clientToken);
-    $("#ord-result").innerHTML = `<p>Order <b>${o.order_id}</b> placed — ${o.title}, ${money(o.price_cents)}. Deposit 35%: ${money(o.deposit_cents)} to start. We will design, send you a proof, and only after you approve it and the balance is paid do clean files release.</p>`;
+    const pricing = o.quote_pending
+      ? "Your order is in. The owner will verify the supplier quote and send your price before work starts."
+      : `${money(o.price_cents)}. Deposit 35%: ${money(o.deposit_cents)} to start.`;
+    $("#ord-result").innerHTML = `<p>Order <b>${o.order_id}</b> placed — ${o.title}. ${pricing} We will send you a proof, and clean files release only after approval and cleared final payment.</p>`;
   } catch (e) { $("#ord-result").innerHTML = `<p style="color:#e06c5a">${e.message}</p>`; }
 }
 
@@ -204,7 +202,7 @@ function renderOwner() {
   if (ownerToken) renderOwnerDash();
 }
 async function ownerSetup() {
-  try { await api("/api/setup-owner", {password: $("#ow-setup").value}); $("#owner-msg").innerHTML = "<p>Owner set — now sign in.</p>"; }
+  try { await api("/api/setup-owner", {password: $("#ow-setup").value, setup_token: $("#ow-setup-token").value}); $("#owner-msg").innerHTML = "<p>Owner set — now sign in.</p>"; }
   catch (e) { $("#owner-msg").innerHTML = `<p style="color:#e06c5a">${e.message}</p>`; }
 }
 async function ownerSignin() {
@@ -225,18 +223,28 @@ async function renderOwnerDash() {
       <div class="pkg"><h3>${o.title}</h3>
       <p><span class="tag">${o.order_id}</span> <span class="state ${o.state}">${o.state}</span> &middot; proof: <b>${o.proof}</b> &middot; client ${o.client_id}</p>
       <p class="muted">${o.brief || ""}</p>
-      <p>Price ${money(o.price_cents)} &middot; deposit ${o.deposit_paid ? "paid" : "due"} &middot; balance ${o.balance_paid ? "paid" : "due"} &middot; paid in full: ${o.paid_in_full ? "yes" : "no"}</p>
+      <p>Price ${o.price_cents == null ? "awaiting owner quote" : money(o.price_cents)} &middot; deposit ${o.deposit_paid ? "paid" : "due"} &middot; balance ${o.balance_paid ? "paid" : "due"} &middot; paid in full: ${o.paid_in_full ? "yes" : "no"}</p>
+      ${o.quote_pending ? `<div style="margin:8px 0"><label>Verified Vistaprint cost (dollars)</label><input id="vp-cost-${o.order_id}" type="number" step="0.01" min="0"><label>Delivery (dollars)</label><input id="vp-delivery-${o.order_id}" type="number" step="0.01" min="0"><button class="btn" onclick="setPrintQuote('${o.order_id}')">Set owner quote</button></div>` : ""}
       <button class="btn ghost" onclick="setState('${o.order_id}','IN_DESIGN')">Start design</button>
       <button class="btn ghost" onclick="setState('${o.order_id}','PROOF_SENT')">Send proof</button>
       <button class="btn ghost" onclick="setState('${o.order_id}','DELIVERED')">Deliver clean files</button>
       <button class="btn ghost" onclick="setState('${o.order_id}','CANCELLED')">Cancel</button>
-      <div style="margin-top:8px"><label>Record a cleared Stripe payment — Stripe object id (pi_ / cs_ / ch_ / in_)</label>
+      <div style="margin-top:8px"><label>Record a cleared Stripe payment — verified Stripe PaymentIntent ID (pi_ only; metadata order_id must match)</label>
       <input id="pay-id-${o.order_id}" placeholder="e.g. pi_...">
       <label>Amount (dollars)</label><input id="pay-amt-${o.order_id}" type="number" step="0.01" min="0">
       <label>Kind</label><select id="pay-kind-${o.order_id}"><option value="deposit">Deposit 35%</option><option value="balance">Balance 65%</option><option value="full">Full payment</option></select>
       <button class="btn" onclick="recordPay('${o.order_id}')">Record cleared payment</button></div>
       </div>`).join("") : "<p>No orders yet.</p>");
   } catch (e) { el.innerHTML = `<p style="color:#e06c5a">${e.message}</p>`; }
+}
+async function setPrintQuote(oid) {
+  const cost = Math.round(parseFloat(document.getElementById("vp-cost-" + oid).value || "0") * 100);
+  const delivery = Math.round(parseFloat(document.getElementById("vp-delivery-" + oid).value || "0") * 100);
+  try {
+    await api("/api/orders/" + oid + "/vistaprint-quote",
+      {vistaprint_cost_cents: cost, delivery_cents: delivery}, ownerToken);
+    renderOwnerDash();
+  } catch (e) { alert(e.message); }
 }
 async function setState(oid, state) {
   try { await api("/api/orders/" + oid + "/state", {state}, ownerToken); renderOwnerDash(); }
