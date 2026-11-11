@@ -8,6 +8,7 @@ import urllib.request
 import urllib.error
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import server as server_module  # noqa: E402
 from server import ThreadingHTTPServer, Handler  # noqa: E402
 
 LINKS = {
@@ -47,6 +48,14 @@ class TestJGA(unittest.TestCase):
         cls.base = "http://127.0.0.1:%d" % cls.port
         threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
         os.environ["JGA_OWNER_SETUP_TOKEN"] = "test-only-bootstrap-token"
+        def fake_stripe_payment(payment_intent_id, expected_amount_cents):
+            if not isinstance(payment_intent_id, str) or not payment_intent_id.startswith("pi_"):
+                from jga import JGAError
+                raise JGAError("only a Stripe PaymentIntent ID (pi_) is accepted")
+            return {"id": payment_intent_id, "status": "succeeded",
+                    "currency": "usd", "amount_received": expected_amount_cents,
+                    "livemode": False}
+        server_module.verify_stripe_payment = fake_stripe_payment
         _, r = call(cls.base, "/api/setup-owner", {
             "password": "owner-pass-123",
             "setup_token": os.environ["JGA_OWNER_SETUP_TOKEN"]
@@ -175,9 +184,20 @@ class TestJGA(unittest.TestCase):
         atok = l1["token"]
         s, o = call(b, "/api/orders", {"print_product_id": "print-flyers",
                                        "brief": "100 flyers",
-                                       "vistaprint_cost_cents": 5000,
-                                       "delivery_cents": 800}, atok)
+                                       "vistaprint_cost_cents": 1,
+                                       "delivery_cents": 0}, atok)
         self.assertEqual(s, 200, o)
+        self.assertTrue(o["quote_pending"])
+        self.assertIsNone(o["price_cents"])
+        # A client cannot set their own print price. Only owner quote can price it.
+        oid = o["order_id"]
+        s, _ = call(b, "/api/orders/%s/vistaprint-quote" % oid,
+                    {"vistaprint_cost_cents": 5000, "delivery_cents": 800}, atok)
+        self.assertEqual(s, 400)
+        s, o = call(b, "/api/orders/%s/vistaprint-quote" % oid,
+                    {"vistaprint_cost_cents": 5000, "delivery_cents": 800}, owner)
+        self.assertEqual(s, 200, o)
+        self.assertFalse(o["quote_pending"])
         self.assertEqual(o["price_cents"], 7140)
         self.assertEqual(o["deposit_cents"], 2499)  # 35% of 7140
         self.assertEqual(o["vistaprint"]["total_cents"], 7140)
