@@ -46,7 +46,11 @@ class TestJGA(unittest.TestCase):
         cls.port = cls.srv.server_address[1]
         cls.base = "http://127.0.0.1:%d" % cls.port
         threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
-        _, r = call(cls.base, "/api/setup-owner", {"password": "owner-pass-123"})
+        os.environ["JGA_OWNER_SETUP_TOKEN"] = "test-only-bootstrap-token"
+        _, r = call(cls.base, "/api/setup-owner", {
+            "password": "owner-pass-123",
+            "setup_token": os.environ["JGA_OWNER_SETUP_TOKEN"]
+        })
         assert r.get("ok")
         _, r = call(cls.base, "/api/login-owner", {"password": "owner-pass-123"})
         cls.owner = r["token"]
