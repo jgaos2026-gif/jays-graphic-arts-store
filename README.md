@@ -11,9 +11,7 @@ python3 server.py --port 8080
 # open http://127.0.0.1:8080/
 ```
 
-First run: set an owner password (8+ characters) on the Owner tab, sign in
-as owner. Clients create their own account on the Account tab. The app
-starts empty — no demo clients or orders.
+First run: configure `JGA_OWNER_SETUP_TOKEN` in the Render environment with a high-entropy one-time bootstrap secret. Enter it with an owner password (8+ characters) on the Owner tab, then sign in as owner. Owner bootstrap is disabled if the token is absent. Clients create their own account on the Account tab. The app starts empty — no demo clients or orders.
 
 ## What it does, with the real rules
 
@@ -35,8 +33,7 @@ $60.00 + $8.00 = $68.00 × 1.05 = $71.40.
 Stripe is TEST MODE (account "Jays graphic arts sandbox",
 acct_1UY8LtRyup299Dc0, livemode false). The app links to the real
 test-mode payment links for the four one-time packages: full payment,
-35% deposit, and 65% balance. Payments are recorded as receipts with
-a Stripe object id; the app moves no bank funds. Social Design and
+35% deposit, and 65% balance. Payment receipt recording now retrieves and verifies the Stripe PaymentIntent server-side. Configure a test-mode `STRIPE_SECRET_KEY`; the PaymentIntent must be succeeded, USD, the exact expected amount, and carry matching `metadata[order_id]`. The app still moves no bank funds. Social Design and
 Design Subscription have NO Stripe price yet — they are ordered in-app
 and billed by the owner from the Stripe Dashboard (invoice / payment
 link). The app says so plainly wherever they appear.
