@@ -146,6 +146,11 @@ class TestJGA(unittest.TestCase):
                     {"stripe_object_id": "not-a-stripe-id", "amount_cents": 12250,
                      "kind": "deposit"}, owner)
         self.assertEqual(s, 400)
+        # A prefix-only PaymentIntent lookalike must not become a URL/path payload.
+        s, _ = call(b, "/api/orders/%s/record-payment" % oid,
+                    {"stripe_object_id": "pi_test/../../api", "amount_cents": 12250,
+                     "kind": "deposit"}, owner)
+        self.assertEqual(s, 400)
         # deposit recorded, then client approves the proof
         s, o = call(b, "/api/orders/%s/record-payment" % oid,
                     {"stripe_object_id": "pi_test_deposit", "amount_cents": 12250,
