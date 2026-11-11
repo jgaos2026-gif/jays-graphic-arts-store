@@ -152,6 +152,14 @@ class TestJGA(unittest.TestCase):
                      "kind": "deposit"}, owner)
         self.assertEqual(s, 200)
         self.assertTrue(o["deposit_paid"])
+        # A PaymentIntent already consumed by one order cannot be replayed
+        # against another order, even if the amounts happen to match.
+        s, other = call(b, "/api/orders", {"package_id": "logo", "brief": "Second logo"}, atok)
+        self.assertEqual(s, 200)
+        s, _ = call(b, "/api/orders/%s/record-payment" % other["order_id"],
+                    {"stripe_object_id": "pi_test_deposit",
+                     "amount_cents": 12250, "kind": "deposit"}, owner)
+        self.assertEqual(s, 400)
         # A full payment cannot be stacked on top of an already-recorded deposit.
         s, _ = call(b, "/api/orders/%s/record-payment" % oid,
                     {"stripe_object_id": "pi_test_full_after_deposit",
