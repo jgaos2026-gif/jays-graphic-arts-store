@@ -345,6 +345,7 @@ class JGAStore:
         if not (brief or "").strip() and not package_id and not service_id:
             raise JGAError("tell us what you need — a package, a service, or a brief")
         order = {"client_id": cid, "brief": (brief or "").strip(),
+                 "created_at": int(time.time()),
                  "state": "REQUESTED", "proof": "none",
                  "deposit_paid": False, "balance_paid": False,
                  "paid_in_full": False, "payments": [],
@@ -538,11 +539,14 @@ class JGAStore:
             raise JGAError("no such order")
         if not isinstance(verified_payment, dict):
             raise JGAError("payment must be retrieved and verified directly with Stripe")
+        metadata = verified_payment.get("metadata")
         if (verified_payment.get("id") != stripe_object_id
                 or verified_payment.get("status") != "succeeded"
                 or verified_payment.get("currency") != "usd"
-                or verified_payment.get("livemode") is not False):
-            raise JGAError("Stripe payment verification failed")
+                or verified_payment.get("livemode") is not False
+                or not isinstance(metadata, dict)
+                or metadata.get("order_id") != order_id):
+            raise JGAError("Stripe payment verification failed or PaymentIntent is not bound to this order")
         if not isinstance(stripe_object_id, str) or not stripe_object_id.startswith("pi_"):
             raise JGAError("only Stripe PaymentIntent IDs are accepted")
         if kind not in ("deposit", "balance", "full"):
@@ -553,8 +557,10 @@ class JGAStore:
         if int(amount_cents) != expected or verified_payment.get("amount_received") != expected:
             raise JGAError("verified Stripe amount does not equal the %s amount of %d cents"
                            % (kind, expected))
-        if any(p.get("stripe_object_id") == stripe_object_id for p in order["payments"]):
-            raise JGAError("Stripe object id already recorded for this order")
+        if any(p.get("stripe_object_id") == stripe_object_id
+               for existing_order in self.orders.values()
+               for p in existing_order["payments"]):
+            raise JGAError("Stripe object id already recorded; cross-order replay rejected")
         if kind == "deposit" and order["deposit_paid"]:
             raise JGAError("deposit already recorded")
         if kind == "balance":
