@@ -66,7 +66,7 @@ from supabase_store import SupabaseStore, SupabaseError  # noqa: E402
 APP = JGAStore()
 
 
-def verify_stripe_payment(payment_intent_id, expected_amount_cents):
+def verify_stripe_payment(payment_intent_id, expected_amount_cents, order_id):
     """Retrieve the PaymentIntent from Stripe; never trust a client-supplied ID."""
     if not isinstance(payment_intent_id, str) or not payment_intent_id.startswith("pi_"):
         raise JGAError("only a Stripe PaymentIntent ID (pi_) is accepted")
@@ -93,6 +93,9 @@ def verify_stripe_payment(payment_intent_id, expected_amount_cents):
         raise JGAError("Stripe amount received does not match the order amount")
     if payment.get("currency") != "usd":
         raise JGAError("Stripe PaymentIntent currency must be USD")
+    metadata = payment.get("metadata")
+    if not isinstance(metadata, dict) or metadata.get("order_id") != order_id:
+        raise JGAError("Stripe PaymentIntent metadata must bind it to this order")
     if payment.get("livemode") is not False:
         raise JGAError("this storefront is configured for Stripe test mode only")
     return payment
@@ -241,7 +244,7 @@ class Handler(BaseHTTPRequestHandler):
             if path.startswith("/api/orders/") and path.endswith("/record-payment"):
                 oid = path.split("/")[3]
                 expected = APP.expected_payment_amount(tok, oid, body["kind"])
-                verified = verify_stripe_payment(body["stripe_object_id"], expected)
+                verified = verify_stripe_payment(body["stripe_object_id"], expected, oid)
                 return self._send(200, APP.record_payment(
                     tok, oid, body["stripe_object_id"],
                     int(body["amount_cents"]), body["kind"], verified))
